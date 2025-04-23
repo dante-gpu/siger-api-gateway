@@ -15,6 +15,9 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 
 	"siger-api-gateway/internal"
+	"siger-api-gateway/internal/discovery"
+	"siger-api-gateway/internal/handlers"
+	"siger-api-gateway/internal/messaging"
 	"siger-api-gateway/internal/middleware"
 )
 
@@ -47,6 +50,82 @@ func main() {
 	logger.Infof("Configuration loaded: port=%s, consul=%s, nats=%s",
 		config.Port, config.ConsulAddress, config.NATSAddress)
 
+	// Initialize service discovery
+	serviceRegistry, err := discovery.NewServiceRegistry(config.ConsulAddress)
+	if err != nil {
+		logger.Warnf("Failed to initialize service registry: %v", err)
+		logger.Warn("Service discovery will be disabled")
+	} else {
+		logger.Info("Service registry initialized")
+
+		// Register the API Gateway itself
+		// Generate a unique ID using hostname and current timestamp
+		hostname, _ := os.Hostname()
+		apiGatewayID := fmt.Sprintf("api-gateway-%s-%d", hostname, time.Now().Unix())
+
+		// Extract the host and port from the configuration
+		// The port config is in the format ":8080", so we need to get localhost or the actual IP
+		host := "localhost" // In production, this should be the actual external IP
+		port := 8080        // Default port
+		if len(config.Port) > 1 {
+			// Parse the port number from the config
+			_, err := fmt.Sscanf(config.Port, ":%d", &port)
+			if err != nil {
+				logger.Warnf("Failed to parse port from config: %v", err)
+			}
+		}
+
+		err = serviceRegistry.Register(
+			apiGatewayID,
+			"api-gateway",
+			host,
+			port,
+			[]string{"gateway", "api"},
+			map[string]string{
+				"version": "1.0.0",
+			},
+		)
+		if err != nil {
+			logger.Warnf("Failed to register service: %v", err)
+		} else {
+			logger.Info("API Gateway registered with Consul")
+
+			// Defer deregistration
+			defer func() {
+				err := serviceRegistry.Deregister(apiGatewayID)
+				if err != nil {
+					logger.Warnf("Failed to deregister service: %v", err)
+				} else {
+					logger.Info("API Gateway deregistered from Consul")
+				}
+			}()
+		}
+	}
+
+	// Initialize NATS client
+	natsClient, err := messaging.NewNATSClient(config.NATSAddress)
+	if err != nil {
+		logger.Warnf("Failed to initialize NATS client: %v", err)
+		logger.Warn("Asynchronous messaging will be disabled")
+	} else {
+		logger.Info("NATS client initialized")
+
+		// Create job streams
+		err = natsClient.CreateStream("jobs", []string{"jobs.*"})
+		if err != nil {
+			logger.Warnf("Failed to create jobs stream: %v", err)
+		} else {
+			logger.Info("Jobs stream created")
+		}
+
+		// Defer connection close
+		defer natsClient.Close()
+	}
+
+	// Create job submission handler
+	jobSubmissionHandler := handlers.NewJobSubmissionHandler(natsClient)
+
+	// Create router
 	router := chi.NewRouter()
 
 	// Middlewares
@@ -69,7 +148,10 @@ func main() {
 
 	// API routes - Version 1
 	router.Route("/api/v1", func(r chi.Router) {
-		// TODO: Add API routes and handlers
+		// Register job submission routes
+		jobSubmissionHandler.RegisterRoutes(r)
+
+		// Status endpoint
 		r.Get("/status", func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusOK)
