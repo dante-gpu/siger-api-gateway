@@ -7,6 +7,25 @@ import (
 	"go.uber.org/zap/zapcore"
 )
 
+// LoggerInterface defines the logging interface used throughout the application
+type LoggerInterface interface {
+	Debug(args ...interface{})
+	Debugf(template string, args ...interface{})
+	Debugw(msg string, keysAndValues ...interface{})
+	Info(args ...interface{})
+	Infof(template string, args ...interface{})
+	Infow(msg string, keysAndValues ...interface{})
+	Warn(args ...interface{})
+	Warnf(template string, args ...interface{})
+	Warnw(msg string, keysAndValues ...interface{})
+	Error(args ...interface{})
+	Errorf(template string, args ...interface{})
+	Errorw(msg string, keysAndValues ...interface{})
+	Fatal(args ...interface{})
+	Fatalf(template string, args ...interface{})
+	Fatalw(msg string, keysAndValues ...interface{})
+}
+
 var Logger *zap.SugaredLogger
 
 // InitLogger initializes the global logger with the specified log level
