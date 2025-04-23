@@ -19,6 +19,7 @@ import (
 	"siger-api-gateway/internal/handlers"
 	"siger-api-gateway/internal/messaging"
 	"siger-api-gateway/internal/middleware"
+	"siger-api-gateway/internal/proxy"
 )
 
 func main() {
@@ -122,22 +123,39 @@ func main() {
 		defer natsClient.Close()
 	}
 
-	// Create job submission handler
+	// Initialize handlers
 	jobSubmissionHandler := handlers.NewJobSubmissionHandler(natsClient)
+	authHandler := handlers.NewAuthHandler(&config)
+
+	// Initialize proxy handler if service registry is available
+	var proxyHandler *proxy.ProxyHandler
+	if serviceRegistry != nil {
+		proxyHandler = proxy.NewProxyHandler(serviceRegistry)
+	}
 
 	// Create router
 	router := chi.NewRouter()
 
-	// Middlewares
+	// Global middlewares (applied to all routes)
 	router.Use(middleware.Recoverer())                  // Recover from panics
 	router.Use(middleware.RequestLogger())              // Log requests using our structured logger
 	router.Use(middleware.Metrics())                    // Collect Prometheus metrics
+	router.Use(middleware.CORS(nil))                    // CORS support with default options
 	router.Use(chiMiddleware.RequestID)                 // Add a request ID to each request
 	router.Use(chiMiddleware.RealIP)                    // Use the real IP from X-Forwarded-For or X-Real-IP
 	router.Use(chiMiddleware.URLFormat)                 // Parse URL format from URL query parameters
 	router.Use(chiMiddleware.Timeout(60 * time.Second)) // Set a 60-second timeout for all requests
 
-	// Health endpoint
+	// Add rate limiting - 100 requests per second with burst of 200
+	if config.LogLevel == "debug" {
+		// In debug mode, use a higher limit for easier testing
+		router.Use(middleware.TokenBucketRateLimit(1000, 2000))
+	} else {
+		// In production, use a more reasonable limit
+		router.Use(middleware.TokenBucketRateLimit(100, 200))
+	}
+
+	// Health endpoint (not rate limited)
 	router.Get("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte("OK"))
@@ -146,12 +164,34 @@ func main() {
 	// Metrics endpoint
 	router.Handle("/metrics", promhttp.Handler())
 
+	// Auth routes - public
+	router.Route("/auth", func(r chi.Router) {
+		authHandler.RegisterRoutes(r)
+	})
+
 	// API routes - Version 1
 	router.Route("/api/v1", func(r chi.Router) {
-		// Register job submission routes
-		jobSubmissionHandler.RegisterRoutes(r)
+		// Protected routes - require authentication
+		r.Group(func(r chi.Router) {
+			// Apply JWT authentication middleware to all routes in this group
+			r.Use(middleware.JWTAuth(config.JWTSecret))
 
-		// Status endpoint
+			// Job submission routes
+			jobSubmissionHandler.RegisterRoutes(r)
+
+			// Admin-only routes
+			r.Group(func(r chi.Router) {
+				r.Use(middleware.RequireRole("admin"))
+				// Admin-specific endpoints would go here
+				r.Get("/admin-stats", func(w http.ResponseWriter, r *http.Request) {
+					w.Header().Set("Content-Type", "application/json")
+					w.WriteHeader(http.StatusOK)
+					w.Write([]byte(`{"admin":"true","message":"Admin access granted"}`))
+				})
+			})
+		})
+
+		// Public routes - no authentication required
 		r.Get("/status", func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusOK)
@@ -159,10 +199,39 @@ func main() {
 		})
 	})
 
+	// Proxy routes - if service registry is available
+	if proxyHandler != nil {
+		router.Route("/services", func(r chi.Router) {
+			// Proxy requests to backend services
+			// The path will be /services/{service-name}/*
+			r.HandleFunc("/{serviceName}/*", func(w http.ResponseWriter, r *http.Request) {
+				serviceName := chi.URLParam(r, "serviceName")
+				if serviceName == "" {
+					http.Error(w, "Service name is required", http.StatusBadRequest)
+					return
+				}
+
+				// Remove the /services/{serviceName} prefix from the path
+				// so that the backend service receives the correct path
+				r.URL.Path = "/" + chi.URLParam(r, "*")
+
+				// Handle the proxy request
+				proxyHandler.HandleProxy(serviceName)(w, r)
+			})
+		})
+	}
+
 	// Admin routes
 	router.Route("/admin", func(r chi.Router) {
-		// TODO: Add admin routes and handlers
-		// These would typically require authentication and authorization
+		// These routes require authentication and admin role
+		r.Use(middleware.JWTAuth(config.JWTSecret))
+		r.Use(middleware.RequireRole("admin"))
+
+		r.Get("/", func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte(`{"message":"Admin dashboard"}`))
+		})
 	})
 
 	// Create server
@@ -194,8 +263,6 @@ func main() {
 	if err := server.Shutdown(ctx); err != nil {
 		logger.Errorf("Server forced to shutdown: %v", err)
 	}
-
-	// Add additional shutdown logic here (e.g., close connections to NATS, Consul, etc.)
 
 	logger.Info("Server gracefully stopped")
 }
