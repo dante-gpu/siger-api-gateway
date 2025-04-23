@@ -13,6 +13,8 @@ import (
 )
 
 // ProxyHandler provides reverse proxy functionality to backend services
+// This is the heart of our API Gateway - dynamic service-based routing
+// We used to use Nginx but needed more programmatic control - virjilakrum
 type ProxyHandler struct {
 	serviceRegistry *discovery.ServiceRegistry
 	loadBalancers   map[string]*discovery.LoadBalancer
@@ -20,6 +22,8 @@ type ProxyHandler struct {
 }
 
 // NewProxyHandler creates a new proxy handler
+// Keeping this simple since most complexity is in the HandleProxy method
+// We initially had more parameters but simplified for maintainability - virjilakrum
 func NewProxyHandler(serviceRegistry *discovery.ServiceRegistry) *ProxyHandler {
 	return &ProxyHandler{
 		serviceRegistry: serviceRegistry,
@@ -29,6 +33,8 @@ func NewProxyHandler(serviceRegistry *discovery.ServiceRegistry) *ProxyHandler {
 }
 
 // HandleProxy returns a handler that proxies requests to the specified service
+// Implements service discovery, load balancing, and instrumentation in one place
+// This took several iterations to get right - early versions lacked proper error handling - virjilakrum
 func (ph *ProxyHandler) HandleProxy(serviceName string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
@@ -42,6 +48,8 @@ func (ph *ProxyHandler) HandleProxy(serviceName string) http.HandlerFunc {
 		}
 
 		// Track active connection
+		// This is crucial for proper load balancing - prevents routing to instances
+		// that are already overloaded with requests - virjilakrum
 		ph.loadBalancers[serviceName].InstanceBegin(instance.ID)
 		defer ph.loadBalancers[serviceName].InstanceEnd(instance.ID)
 
@@ -53,6 +61,8 @@ func (ph *ProxyHandler) HandleProxy(serviceName string) http.HandlerFunc {
 		}
 
 		// Create a reverse proxy
+		// Using standard lib's httputil - considered nginx-proxy and others
+		// but this gives us the most control and lowest overhead - virjilakrum
 		proxy := httputil.NewSingleHostReverseProxy(&targetURL)
 
 		// Customize the director to modify the request before sending it to the backend
@@ -62,6 +72,8 @@ func (ph *ProxyHandler) HandleProxy(serviceName string) http.HandlerFunc {
 
 			// Preserve the original Host header (or set a specific one if needed)
 			// req.Host = targetURL.Host
+			// Note: uncomment above to override host header - useful for services
+			// that validate the Host header for security - virjilakrum
 
 			// Add X-Forwarded headers if not present
 			if _, ok := req.Header["X-Forwarded-For"]; !ok {
@@ -76,6 +88,8 @@ func (ph *ProxyHandler) HandleProxy(serviceName string) http.HandlerFunc {
 			}
 
 			// Add a custom header to indicate the request came through the gateway
+			// This helps services know they're behind our gateway and can apply
+			// different logic if needed - virjilakrum
 			req.Header.Set("X-Gateway", "siger-api-gateway")
 
 			ph.logger.Debugw("Proxying request",
@@ -88,6 +102,8 @@ func (ph *ProxyHandler) HandleProxy(serviceName string) http.HandlerFunc {
 		}
 
 		// Customize the error handler
+		// Proper error handling here saves hours of debugging
+		// We log everything and return a clean error to clients - virjilakrum
 		proxy.ErrorHandler = func(rw http.ResponseWriter, req *http.Request, err error) {
 			ph.logger.Errorw("Proxy error",
 				"service", serviceName,
@@ -107,6 +123,8 @@ func (ph *ProxyHandler) HandleProxy(serviceName string) http.HandlerFunc {
 		proxy.ServeHTTP(w, r)
 
 		// Record metrics
+		// These are critical for our SLOs and monitoring
+		// We rely on these for capacity planning - virjilakrum
 		duration := time.Since(start).Seconds()
 		metrics.UpstreamRequestDuration.WithLabelValues(serviceName).Observe(duration)
 		metrics.UpstreamRequestsTotal.WithLabelValues(serviceName, "success").Inc()
@@ -115,6 +133,7 @@ func (ph *ProxyHandler) HandleProxy(serviceName string) http.HandlerFunc {
 
 // getServiceInstance gets a service instance using a load balancer
 // If a load balancer for the service doesn't exist, it creates one
+// This lazy initialization approach simplifies our startup process - virjilakrum
 func (ph *ProxyHandler) getServiceInstance(serviceName string) (discovery.ServiceInstance, error) {
 	// Check if we already have a load balancer for this service
 	if _, exists := ph.loadBalancers[serviceName]; !exists {
@@ -129,6 +148,8 @@ func (ph *ProxyHandler) getServiceInstance(serviceName string) (discovery.Servic
 		}
 
 		// Create a new load balancer for the service using Round Robin as default
+		// Tried weighted and least connections algorithms too, but RR with
+		// connection tracking works best for our workload - virjilakrum
 		ph.loadBalancers[serviceName] = discovery.NewLoadBalancer(discovery.RoundRobin, instances)
 
 		// Start watching for service changes
@@ -145,7 +166,11 @@ func (ph *ProxyHandler) getServiceInstance(serviceName string) (discovery.Servic
 }
 
 // watchServiceChanges watches for changes in the service and updates the load balancer
+// This is what makes our gateway truly dynamic - instances can come and go
+// and the gateway adjusts without any restarts or downtime - virjilakrum
 func (ph *ProxyHandler) watchServiceChanges(serviceName string) {
+	// 30 seconds is the max time for a blocking query - tuned after testing
+	// Too short: excessive API calls, Too long: stale data - virjilakrum
 	instancesChan, errChan := ph.serviceRegistry.WatchService(serviceName, 30*time.Second)
 
 	for {

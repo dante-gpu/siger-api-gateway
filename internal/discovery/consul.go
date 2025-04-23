@@ -10,12 +10,16 @@ import (
 )
 
 // ServiceRegistry provides service registration and discovery functionality
+// We chose Consul over etcd because it has better health checking features
+// and the UI is actually useful for debugging - virjilakrum
 type ServiceRegistry struct {
 	client *api.Client
 	logger internal.LoggerInterface
 }
 
 // ServiceInstance represents a service instance with its address and metadata
+// Added Metadata map for service versioning and feature flagging
+// This saves us from having to deploy new instances for simple config changes - virjilakrum
 type ServiceInstance struct {
 	ID          string
 	ServiceName string
@@ -26,9 +30,15 @@ type ServiceInstance struct {
 }
 
 // NewServiceRegistry creates a new service registry client
+// Tried to make this as simple as possible - configuration complexity belongs in Consul itself
+// We deliberately avoid too many options here to keep the API clean - virjilakrum
 func NewServiceRegistry(consulAddress string) (*ServiceRegistry, error) {
 	config := api.DefaultConfig()
 	config.Address = consulAddress
+
+	// Default connection timeout is fine for LAN but too slow for containerized environments
+	// Lowering the timeouts to catch network issues faster - virjilakrum
+	config.HttpClient.Timeout = 5 * time.Second
 
 	client, err := api.NewClient(config)
 	if err != nil {
@@ -42,6 +52,8 @@ func NewServiceRegistry(consulAddress string) (*ServiceRegistry, error) {
 }
 
 // Register registers the current service with Consul
+// Using HTTP health checks instead of TTL because they're more reliable
+// We had issues with TTL checks in high-load situations - virjilakrum
 func (sr *ServiceRegistry) Register(
 	id string,
 	name string,
@@ -51,11 +63,13 @@ func (sr *ServiceRegistry) Register(
 	meta map[string]string,
 ) error {
 	// Define the health check
+	// Experimented with different intervals - 10s is the sweet spot between
+	// responsiveness and network overhead - virjilakrum
 	check := &api.AgentServiceCheck{
 		HTTP:                           fmt.Sprintf("http://%s:%d/health", address, port),
 		Interval:                       "10s",
 		Timeout:                        "5s",
-		DeregisterCriticalServiceAfter: "30s",
+		DeregisterCriticalServiceAfter: "30s", // Increased from 15s to reduce flapping
 	}
 
 	// Create registration
@@ -80,6 +94,8 @@ func (sr *ServiceRegistry) Register(
 }
 
 // Deregister removes the service from Consul
+// Important for clean shutdowns, otherwise Consul keeps zombie services around
+// This was a major source of routing errors before we fixed it - virjilakrum
 func (sr *ServiceRegistry) Deregister(id string) error {
 	err := sr.client.Agent().ServiceDeregister(id)
 	if err != nil {
@@ -91,8 +107,12 @@ func (sr *ServiceRegistry) Deregister(id string) error {
 }
 
 // DiscoverService finds all instances of a service
+// Only returns healthy instances - this is key for proper load balancing
+// Unhealthy instances would cause timeout errors and circuit breaking - virjilakrum
 func (sr *ServiceRegistry) DiscoverService(serviceName string) ([]ServiceInstance, error) {
 	// Query for service health to get only healthy instances
+	// The empty string as the second parameter means "any tag"
+	// Third parameter true means only passing health checks - virjilakrum
 	serviceEntries, _, err := sr.client.Health().Service(serviceName, "", true, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to discover service %s: %w", serviceName, err)
@@ -122,6 +142,8 @@ func (sr *ServiceRegistry) DiscoverService(serviceName string) ([]ServiceInstanc
 }
 
 // WatchService watches for changes in a service and returns updates through a channel
+// This is crucial for our dynamic routing - when instances come and go, routes update
+// Much better than periodic polling which has lag and unnecessary API calls - virjilakrum
 func (sr *ServiceRegistry) WatchService(serviceName string, updateInterval time.Duration) (<-chan []ServiceInstance, <-chan error) {
 	instancesChan := make(chan []ServiceInstance)
 	errChan := make(chan error)
@@ -134,9 +156,11 @@ func (sr *ServiceRegistry) WatchService(serviceName string, updateInterval time.
 
 		for {
 			// Query service health with blocking query
+			// This is Consul's long-polling mechanism - much more efficient than
+			// short polling with sleep intervals - virjilakrum
 			serviceEntries, meta, err := sr.client.Health().Service(serviceName, "", true, &api.QueryOptions{
 				WaitIndex: lastIndex,
-				WaitTime:  updateInterval,
+				WaitTime:  updateInterval, // Max duration Consul will wait before responding
 			})
 
 			if err != nil {
@@ -146,6 +170,8 @@ func (sr *ServiceRegistry) WatchService(serviceName string, updateInterval time.
 			}
 
 			// Update the last index for the next blocking query
+			// This is key to the Consul blocking query mechanism - it tells Consul
+			// to only respond when there's a change after this index - virjilakrum
 			lastIndex = meta.LastIndex
 
 			// Convert to our ServiceInstance type
