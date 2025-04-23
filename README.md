@@ -27,7 +27,7 @@ DanteGPU's high-performance, cloud-native API Gateway for the NVIDIA GPU-based A
 Clone the repository:
 
 ```bash
-git clone https://github.com/yourusername/siger-api-gateway.git
+git clone https://github.com/dante-gpu/siger-api-gateway.git
 cd siger-api-gateway
 ```
 
