@@ -1,0 +1,3 @@
+port: ":8080"
+consul_address: "localhost:8500"
+nats_address: "localhost:4222"

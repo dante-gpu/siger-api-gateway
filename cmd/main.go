@@ -2,14 +2,23 @@ package main
 
 import (
 	"fmt"
+	"log"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
+
+	"../internal"
 )
 
 func main() {
 	fmt.Println("Starting API Gateway...")
+
+	// Load config
+	config, err := internal.LoadConfig("configs")
+	if err != nil {
+		log.Fatal("cannot load config:", err)
+	}
 
 	router := chi.NewRouter()
 
@@ -24,9 +33,8 @@ func main() {
 	})
 
 	// Start server
-	port := ":8080"
-	fmt.Printf("Listening on port %s\n", port)
-	err := http.ListenAndServe(port, router)
+	fmt.Printf("Listening on port %s\n", config.Port)
+	err = http.ListenAndServe(config.Port, router)
 	if err != nil {
 		fmt.Printf("Error starting server: %s\n", err)
 	}
