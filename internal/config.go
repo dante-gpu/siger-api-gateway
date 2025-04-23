@@ -11,6 +11,7 @@ type Config struct {
 	Port          string `mapstructure:"port"`
 	ConsulAddress string `mapstructure:"consul_address"`
 	NATSAddress   string `mapstructure:"nats_address"`
+	LogLevel      string `mapstructure:"log_level"`
 }
 
 func LoadConfig(path string) (config Config, err error) {
@@ -34,6 +35,11 @@ func LoadConfig(path string) (config Config, err error) {
 		return Config{}, fmt.Errorf("failed to unmarshal config: %w", err)
 	}
 
+	// Set default values if not provided
+	if config.LogLevel == "" {
+		config.LogLevel = "info"
+	}
+
 	return
 }
 
@@ -44,7 +50,8 @@ func EnsureConfigExists(path string) error {
 		// Create a default config file
 		defaultConfig := []byte(`port: ":8080"
 consul_address: "localhost:8500"
-nats_address: "localhost:4222"`)
+nats_address: "localhost:4222"
+log_level: "info"`)
 
 		err = os.WriteFile(configPath, defaultConfig, 0644)
 		if err != nil {

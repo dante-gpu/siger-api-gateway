@@ -8,14 +8,21 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 
-	"../internal"
+	"siger-api-gateway/internal"
 )
 
 func main() {
 	fmt.Println("Starting API Gateway...")
 
+	// Ensure config file exists
+	configPath := "configs"
+	err := internal.EnsureConfigExists(configPath)
+	if err != nil {
+		log.Fatal("cannot ensure config exists:", err)
+	}
+
 	// Load config
-	config, err := internal.LoadConfig("configs")
+	config, err := internal.LoadConfig(configPath)
 	if err != nil {
 		log.Fatal("cannot load config:", err)
 	}
