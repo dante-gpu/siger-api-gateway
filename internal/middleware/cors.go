@@ -7,6 +7,8 @@ import (
 )
 
 // CORS middleware options
+// Comprehensive options to handle different CORS requirements
+// We need this flexibility for both web and mobile clients - virjilakrum
 type CORSOptions struct {
 	AllowedOrigins   []string // List of allowed origins
 	AllowedMethods   []string // List of allowed HTTP methods
@@ -17,6 +19,8 @@ type CORSOptions struct {
 }
 
 // DefaultCORSOptions returns the default CORS options
+// Somewhat permissive defaults for easier dev experience
+// Production deployments should override these with stricter values - virjilakrum
 func DefaultCORSOptions() *CORSOptions {
 	return &CORSOptions{
 		AllowedOrigins:   []string{"*"}, // Allow all origins
@@ -29,6 +33,8 @@ func DefaultCORSOptions() *CORSOptions {
 }
 
 // CORS returns a middleware that handles CORS
+// Fully implements the CORS spec for preflight requests and actual requests
+// Added support for wildcard origins to simplify development - virjilakrum
 func CORS(options *CORSOptions) func(next http.Handler) http.Handler {
 	if options == nil {
 		options = DefaultCORSOptions()
@@ -50,6 +56,8 @@ func CORS(options *CORSOptions) func(next http.Handler) http.Handler {
 			}
 
 			// Check if the origin is allowed
+			// Case insensitive matching for more robust handling
+			// Had issues with mobile apps sending slightly different origin formats - virjilakrum
 			originAllowed := allowedOriginsAll || allowedOrigins[strings.ToLower(origin)]
 			if !originAllowed {
 				next.ServeHTTP(w, r)
@@ -64,6 +72,8 @@ func CORS(options *CORSOptions) func(next http.Handler) http.Handler {
 			}
 
 			// Handle preflight OPTIONS request
+			// This is critical for browsers to allow the actual request
+			// Must respond with 204 No Content for proper preflight - virjilakrum
 			if r.Method == "OPTIONS" {
 				w.Header().Set("Access-Control-Allow-Methods", strings.Join(options.AllowedMethods, ", "))
 				w.Header().Set("Access-Control-Allow-Headers", strings.Join(options.AllowedHeaders, ", "))
@@ -79,6 +89,8 @@ func CORS(options *CORSOptions) func(next http.Handler) http.Handler {
 			}
 
 			// For non-OPTIONS requests, just add the exposed headers
+			// This helps browsers know which headers they can access via JavaScript
+			// Essential for tokens in headers and pagination links - virjilakrum
 			w.Header().Set("Access-Control-Expose-Headers", strings.Join(options.ExposedHeaders, ", "))
 			if options.AllowCredentials {
 				w.Header().Set("Access-Control-Allow-Credentials", "true")

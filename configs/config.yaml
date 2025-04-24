@@ -1,6 +1,25 @@
 port: ":8080"
-consul_address: "localhost:8500"
-nats_address: "localhost:4222"
-log_level: "info"
-jwt_secret: "default-very-secure-jwt-secret-key-change-in-production"
-jwt_expiration: 60
+logLevel: "info"
+jwtSecret: "default-very-secure-jwt-secret-key-change-in-production"
+jwtExpiration: 60
+consulAddress: "localhost:8500"
+natsAddress: "localhost:4222"
+
+corsAllowed:
+  origins:
+    - "http://localhost:3000"
+    - "http://localhost:8080"
+  methods:
+    - "GET"
+    - "POST"
+    - "PUT"
+    - "DELETE"
+    - "OPTIONS"
+    - "PATCH"
+  headers:
+    - "Accept"
+    - "Authorization"
+    - "Content-Type"
+    - "X-CSRF-Token"
+    - "X-Request-ID"
+    - "X-Requested-With"

@@ -20,6 +20,7 @@ import (
 	"siger-api-gateway/internal/messaging"
 	"siger-api-gateway/internal/middleware"
 	"siger-api-gateway/internal/proxy"
+	"siger-api-gateway/internal/storage"
 )
 
 func main() {
@@ -120,29 +121,51 @@ func main() {
 	// Initialize NATS client
 	// Using NATS with JetStream for durable, persistent messaging
 	// Much more lightweight than Kafka and easier to set up - virjilakrum
-	natsClient, err := messaging.NewNATSClient(config.NATSAddress)
+	natsConfig := messaging.NATSConfig{
+		URL:      config.NATSAddress,
+		Stream:   "jobs",
+		MaxAge:   "24h", // Store messages for 24 hours
+		Replicas: 1,     // Single replica for development, increase for production
+	}
+	natsClient, err := messaging.NewNATSClient(natsConfig, logger)
 	if err != nil {
 		logger.Warnf("Failed to initialize NATS client: %v", err)
 		logger.Warn("Asynchronous messaging will be disabled")
 	} else {
 		logger.Info("NATS client initialized")
 
-		// Create job streams
+		// Ensure job stream exists
 		// Using wildcard subjects for job types to allow easy filtering
 		// Makes it easy to add new job types without changing consumers - virjilakrum
-		err = natsClient.CreateStream("jobs", []string{"jobs.*"})
+		err = natsClient.EnsureStream([]string{"jobs.*"})
 		if err != nil {
-			logger.Warnf("Failed to create jobs stream: %v", err)
+			logger.Warnf("Failed to ensure jobs stream: %v", err)
 		} else {
 			logger.Info("Jobs stream created")
+		}
+
+		// Initialize job status subscription
+		err = natsClient.SubscribeToStatusUpdates()
+		if err != nil {
+			logger.Warnf("Failed to subscribe to job status updates: %v", err)
+		} else {
+			logger.Info("Subscribed to job status updates")
 		}
 
 		// Defer connection close
 		defer natsClient.Close()
 	}
 
+	// Initialize job store
+	jobStore := storage.NewJobStore(10000) // Store up to 10,000 jobs in memory
+
+	// Set job store in NATS client for status updates
+	if natsClient != nil {
+		natsClient.SetJobStore(jobStore)
+	}
+
 	// Initialize handlers
-	jobSubmissionHandler := handlers.NewJobSubmissionHandler(natsClient)
+	jobSubmissionHandler := handlers.NewJobSubmissionHandler(natsClient, jobStore)
 	authHandler := handlers.NewAuthHandler(&config)
 
 	// Initialize proxy handler if service registry is available

@@ -17,6 +17,7 @@ type Config struct {
 	Port          string `yaml:"port"`
 	LogLevel      string `yaml:"logLevel"`
 	JWTSecret     string `yaml:"jwtSecret"`
+	JWTExpiration int    `yaml:"jwtExpiration"` // JWT token expiration in minutes
 	ConsulAddress string `yaml:"consulAddress"`
 	NATSAddress   string `yaml:"natsAddress"`
 	CORSAllowed   struct {
@@ -34,6 +35,7 @@ func DefaultConfig() Config {
 		Port:          ":8080",
 		LogLevel:      "info",
 		JWTSecret:     "default-jwt-secret-change-me-in-production", // Obviously needs to be changed in prod
+		JWTExpiration: 60,                                           // Default 60 minutes (1 hour) expiration
 		ConsulAddress: "localhost:8500",
 		NATSAddress:   "nats://localhost:4222",
 	}
@@ -131,6 +133,7 @@ func EnsureConfigExists(configPath string) error {
 port: :8080          # The port to listen on
 logLevel: info       # debug, info, warn, error, or fatal
 jwtSecret: default-jwt-secret-change-me-in-production  # Secret for JWT signing - CHANGE THIS!
+jwtExpiration: 60  # JWT token expiration in minutes
 
 # Service discovery configuration
 consulAddress: localhost:8500   # Consul address for service discovery

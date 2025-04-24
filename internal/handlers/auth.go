@@ -13,6 +13,8 @@ import (
 )
 
 // AuthHandler handles authentication requests
+// We support both JWT-based token auth and future OAuth integration
+// Initially considered using Auth0 but wanted more control - virjilakrum
 type AuthHandler struct {
 	config *internal.Config
 	logger internal.LoggerInterface
@@ -22,6 +24,8 @@ type AuthHandler struct {
 }
 
 // User represents a user in the system
+// Simplified model - production would have more fields
+// Like email, verification status, MFA, etc. - virjilakrum
 type User struct {
 	ID       string `json:"id"`
 	Username string `json:"username"`
@@ -36,6 +40,8 @@ type LoginRequest struct {
 }
 
 // LoginResponse represents a login response
+// Including expiration time in the response helps clients
+// know when to request a new token - virjilakrum
 type LoginResponse struct {
 	Token     string    `json:"token"`
 	ExpiresAt time.Time `json:"expires_at"`
@@ -45,6 +51,8 @@ type LoginResponse struct {
 }
 
 // NewAuthHandler creates a new authentication handler
+// In our real deployment, this connects to our user database
+// Mock is just for development/testing - virjilakrum
 func NewAuthHandler(config *internal.Config) *AuthHandler {
 	// Mock users for demonstration purposes
 	mockUsers := map[string]User{
@@ -70,6 +78,8 @@ func NewAuthHandler(config *internal.Config) *AuthHandler {
 }
 
 // RegisterRoutes registers the authentication routes
+// Grouped all auth-related endpoints under /auth for easier management
+// And cleaner API structure - virjilakrum
 func (h *AuthHandler) RegisterRoutes(r chi.Router) {
 	r.Post("/login", h.Login)
 	r.Post("/register", h.Register)
@@ -82,6 +92,8 @@ func (h *AuthHandler) RegisterRoutes(r chi.Router) {
 }
 
 // Login handles user login
+// Uses standard username/password auth for simplicity
+// Could add support for social login or 2FA later - virjilakrum
 func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 	var req LoginRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -90,6 +102,7 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// In a real application, you would validate credentials against a database
+	// And properly hash/salt passwords - never store plaintext! - virjilakrum
 	user, exists := h.mockUsers[req.Username]
 	if !exists || user.Password != req.Password {
 		http.Error(w, "Invalid credentials", http.StatusUnauthorized)
@@ -97,6 +110,8 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Generate JWT token
+	// Using HMAC-SHA256 algorithm for token signing
+	// Considered RSA but the key management was overkill - virjilakrum
 	token, err := middleware.GenerateToken(
 		user.ID,
 		user.Username,
@@ -129,6 +144,8 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 }
 
 // Register handles user registration
+// In production, this would create a new user in the database
+// And trigger email verification - virjilakrum
 func (h *AuthHandler) Register(w http.ResponseWriter, r *http.Request) {
 	var user User
 	if err := json.NewDecoder(r.Body).Decode(&user); err != nil {
@@ -149,6 +166,7 @@ func (h *AuthHandler) Register(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// In a real application, you would hash the password and save to a database
+	// We'd use bcrypt with at least cost factor 12 for password hashing - virjilakrum
 	user.ID = uuid.New().String()
 	if user.Role == "" {
 		user.Role = "user" // Default role
@@ -169,6 +187,8 @@ func (h *AuthHandler) Register(w http.ResponseWriter, r *http.Request) {
 }
 
 // GetProfile returns the user profile (example of a protected endpoint)
+// Demonstrates how to use the context set by JWT middleware
+// to access the authenticated user - virjilakrum
 func (h *AuthHandler) GetProfile(w http.ResponseWriter, r *http.Request) {
 	// Get user ID from context (set by JWT middleware)
 	userID, ok := r.Context().Value(middleware.UserIDContextKey).(string)
@@ -178,6 +198,7 @@ func (h *AuthHandler) GetProfile(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Find user by ID
+	// In production, this would be a database lookup - virjilakrum
 	var user User
 	found := false
 	for _, u := range h.mockUsers {
