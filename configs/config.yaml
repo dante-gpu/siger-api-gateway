@@ -2,7 +2,7 @@ port: ":8080"
 logLevel: "info"
 jwtSecret: "default-very-secure-jwt-secret-key-change-in-production"
 jwtExpiration: 60
-consulAddress: "localhost:8500"
+consulAddress: ""
 natsAddress: "nats://localhost:4222"
 
 corsAllowed:

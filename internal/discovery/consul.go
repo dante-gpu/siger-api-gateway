@@ -66,6 +66,10 @@ func (sr *ServiceRegistry) Register(
 	tags []string,
 	meta map[string]string,
 ) error {
+	if sr == nil || sr.client == nil {
+		return fmt.Errorf("service registry not properly initialized")
+	}
+
 	// Define the health check
 	// Experimented with different intervals - 10s is the sweet spot between
 	// responsiveness and network overhead - virjilakrum
@@ -101,6 +105,10 @@ func (sr *ServiceRegistry) Register(
 // Important for clean shutdowns, otherwise Consul keeps zombie services around
 // This was a major source of routing errors before we fixed it - virjilakrum
 func (sr *ServiceRegistry) Deregister(id string) error {
+	if sr == nil || sr.client == nil {
+		return fmt.Errorf("service registry not properly initialized")
+	}
+
 	err := sr.client.Agent().ServiceDeregister(id)
 	if err != nil {
 		return fmt.Errorf("failed to deregister service: %w", err)
@@ -114,6 +122,10 @@ func (sr *ServiceRegistry) Deregister(id string) error {
 // Only returns healthy instances - this is key for proper load balancing
 // Unhealthy instances would cause timeout errors and circuit breaking - virjilakrum
 func (sr *ServiceRegistry) DiscoverService(serviceName string) ([]ServiceInstance, error) {
+	if sr == nil || sr.client == nil {
+		return nil, fmt.Errorf("service registry not properly initialized")
+	}
+
 	// Query for service health to get only healthy instances
 	// The empty string as the second parameter means "any tag"
 	// Third parameter true means only passing health checks - virjilakrum

@@ -61,99 +61,111 @@ func main() {
 	// Initialize service discovery
 	// Consul gives us both service reg/discovery and KV store capabilities
 	// Could have used etcd but Consul's UI is nicer for debugging - virjilakrum
-	serviceRegistry, err := discovery.NewServiceRegistry(config.ConsulAddress)
-	if err != nil {
-		logger.Warnf("Failed to initialize service registry: %v", err)
-		logger.Warn("Service discovery will be disabled")
-	} else {
-		logger.Info("Service registry initialized")
+	var serviceRegistry *discovery.ServiceRegistry
+	if config.ConsulAddress != "" {
+		var err error
+		serviceRegistry, err = discovery.NewServiceRegistry(config.ConsulAddress)
+		if err != nil {
+			logger.Warnf("Failed to initialize service registry: %v", err)
+			logger.Warn("Service discovery will be disabled")
+		} else {
+			logger.Info("Service registry initialized")
 
-		// Register the API Gateway itself
-		// Generate a unique ID using hostname and current timestamp
-		// This prevents conflicts if multiple gateways run on same host - virjilakrum
-		hostname, _ := os.Hostname()
-		apiGatewayID := fmt.Sprintf("api-gateway-%s-%d", hostname, time.Now().Unix())
+			// Register the API Gateway itself
+			// Generate a unique ID using hostname and current timestamp
+			// This prevents conflicts if multiple gateways run on same host - virjilakrum
+			hostname, _ := os.Hostname()
+			apiGatewayID := fmt.Sprintf("api-gateway-%s-%d", hostname, time.Now().Unix())
 
-		// Extract the host and port from the configuration
-		// The port config is in the format ":8080", so we need to get localhost or the actual IP
-		host := "localhost" // In production, this should be the actual external IP
-		port := 8080        // Default port
-		if len(config.Port) > 1 {
-			// Parse the port number from the config
-			_, err := fmt.Sscanf(config.Port, ":%d", &port)
+			// Extract the host and port from the configuration
+			// The port config is in the format ":8080", so we need to get localhost or the actual IP
+			host := "localhost" // In production, this should be the actual external IP
+			port := 8080        // Default port
+			if len(config.Port) > 1 {
+				// Parse the port number from the config
+				_, err := fmt.Sscanf(config.Port, ":%d", &port)
+				if err != nil {
+					logger.Warnf("Failed to parse port from config: %v", err)
+				}
+			}
+
+			// Using a 10s HTTP health check interval - found this to be optimal
+			// Shorter interval = more traffic, longer = delayed failure detection
+			// 5s timeout is enough since health endpoint is lightweight - virjilakrum
+			err = serviceRegistry.Register(
+				apiGatewayID,
+				"api-gateway",
+				host,
+				port,
+				[]string{"gateway", "api"},
+				map[string]string{
+					"version": "1.0.0",
+				},
+			)
 			if err != nil {
-				logger.Warnf("Failed to parse port from config: %v", err)
+				logger.Warnf("Failed to register service: %v", err)
+			} else {
+				logger.Info("API Gateway registered with Consul")
+
+				// Defer deregistration
+				// Critical to clean up when stopping to avoid stale services in Consul
+				// Had issues with ghost services before adding this - virjilakrum
+				defer func() {
+					err := serviceRegistry.Deregister(apiGatewayID)
+					if err != nil {
+						logger.Warnf("Failed to deregister service: %v", err)
+					} else {
+						logger.Info("API Gateway deregistered from Consul")
+					}
+				}()
 			}
 		}
-
-		// Using a 10s HTTP health check interval - found this to be optimal
-		// Shorter interval = more traffic, longer = delayed failure detection
-		// 5s timeout is enough since health endpoint is lightweight - virjilakrum
-		err = serviceRegistry.Register(
-			apiGatewayID,
-			"api-gateway",
-			host,
-			port,
-			[]string{"gateway", "api"},
-			map[string]string{
-				"version": "1.0.0",
-			},
-		)
-		if err != nil {
-			logger.Warnf("Failed to register service: %v", err)
-		} else {
-			logger.Info("API Gateway registered with Consul")
-
-			// Defer deregistration
-			// Critical to clean up when stopping to avoid stale services in Consul
-			// Had issues with ghost services before adding this - virjilakrum
-			defer func() {
-				err := serviceRegistry.Deregister(apiGatewayID)
-				if err != nil {
-					logger.Warnf("Failed to deregister service: %v", err)
-				} else {
-					logger.Info("API Gateway deregistered from Consul")
-				}
-			}()
-		}
+	} else {
+		logger.Warn("Consul address not configured, service discovery will be disabled")
 	}
 
 	// Initialize NATS client
 	// Using NATS with JetStream for durable, persistent messaging
 	// Much more lightweight than Kafka and easier to set up - virjilakrum
-	natsConfig := messaging.NATSConfig{
-		URL:      config.NATSAddress,
-		Stream:   "jobs",
-		MaxAge:   "24h", // Store messages for 24 hours
-		Replicas: 1,     // Single replica for development, increase for production
-	}
-	natsClient, err := messaging.NewNATSClient(natsConfig, logger)
-	if err != nil {
-		logger.Warnf("Failed to initialize NATS client: %v", err)
-		logger.Warn("Asynchronous messaging will be disabled")
+	var natsClient *messaging.NATSClient
+	if config.NATSAddress != "" {
+		natsConfig := messaging.NATSConfig{
+			URL:      config.NATSAddress,
+			Stream:   "jobs",
+			MaxAge:   "24h", // Store messages for 24 hours
+			Replicas: 1,     // Single replica for development, increase for production
+		}
+		var err error
+		natsClient, err = messaging.NewNATSClient(natsConfig, logger)
+		if err != nil {
+			logger.Warnf("Failed to initialize NATS client: %v", err)
+			logger.Warn("Asynchronous messaging will be disabled")
+		} else {
+			logger.Info("NATS client initialized")
+
+			// Ensure job stream exists
+			// Using wildcard subjects for job types to allow easy filtering
+			// Makes it easy to add new job types without changing consumers - virjilakrum
+			err = natsClient.EnsureStream([]string{"jobs.*"})
+			if err != nil {
+				logger.Warnf("Failed to ensure jobs stream: %v", err)
+			} else {
+				logger.Info("Jobs stream created")
+			}
+
+			// Initialize job status subscription
+			err = natsClient.SubscribeToStatusUpdates()
+			if err != nil {
+				logger.Warnf("Failed to subscribe to job status updates: %v", err)
+			} else {
+				logger.Info("Subscribed to job status updates")
+			}
+
+			// Defer connection close
+			defer natsClient.Close()
+		}
 	} else {
-		logger.Info("NATS client initialized")
-
-		// Ensure job stream exists
-		// Using wildcard subjects for job types to allow easy filtering
-		// Makes it easy to add new job types without changing consumers - virjilakrum
-		err = natsClient.EnsureStream([]string{"jobs.*"})
-		if err != nil {
-			logger.Warnf("Failed to ensure jobs stream: %v", err)
-		} else {
-			logger.Info("Jobs stream created")
-		}
-
-		// Initialize job status subscription
-		err = natsClient.SubscribeToStatusUpdates()
-		if err != nil {
-			logger.Warnf("Failed to subscribe to job status updates: %v", err)
-		} else {
-			logger.Info("Subscribed to job status updates")
-		}
-
-		// Defer connection close
-		defer natsClient.Close()
+		logger.Warn("NATS address not configured, asynchronous messaging will be disabled")
 	}
 
 	// Initialize job store
