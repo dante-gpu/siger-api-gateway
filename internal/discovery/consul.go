@@ -33,6 +33,10 @@ type ServiceInstance struct {
 // Tried to make this as simple as possible - configuration complexity belongs in Consul itself
 // We deliberately avoid too many options here to keep the API clean - virjilakrum
 func NewServiceRegistry(consulAddress string) (*ServiceRegistry, error) {
+	if consulAddress == "" {
+		return nil, fmt.Errorf("consul address is required")
+	}
+
 	config := api.DefaultConfig()
 	config.Address = consulAddress
 

@@ -1,0 +1,34 @@
+version: '3'
+
+services:
+  # NATS with JetStream enabled
+  nats:
+    image: nats:latest
+    command: "--jetstream"
+    ports:
+      - "4222:4222"  # Client connections
+      - "8222:8222"  # HTTP monitoring
+    volumes:
+      - nats-data:/data
+    networks:
+      - siger-network
+
+  # Consul for service discovery
+  consul:
+    image: hashicorp/consul:latest
+    ports:
+      - "8500:8500"  # UI and API
+      - "8600:8600/udp"  # DNS
+    command: "agent -dev -client=0.0.0.0"
+    volumes:
+      - consul-data:/consul/data
+    networks:
+      - siger-network
+
+networks:
+  siger-network:
+    driver: bridge
+
+volumes:
+  nats-data:
+  consul-data: 
